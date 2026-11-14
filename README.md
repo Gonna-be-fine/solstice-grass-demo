@@ -1,6 +1,6 @@
 # Solstice — Meadow Study
 
-A standalone Three.js WebGPU grass-field demo, inspired by the procedural meadow and garden layout in [SamG-Coder/solstice-garden](https://github.com/SamG-Coder/solstice-garden). This is a clean-room Three.js recreation, not a port of Solstice's Rust renderer.
+A standalone Three.js WebGPU grass-field demo, inspired by the procedural meadow and garden layout in [SamG-Coder/solstice-garden](https://github.com/SamG-Coder/solstice-garden). This is an independent Three.js recreation, not a port of Solstice's Rust renderer.
 
 ## Run locally
 
@@ -13,14 +13,15 @@ npm run dev
 
 Open the local URL printed by Vite. Drag to orbit and scroll to zoom. Use the Breeze slider to change the grass movement.
 
-## Grass approach
+## Grass and pond
 
-- Dense, deterministic, jittered tuft placement (about 25 clumps per square metre in the meadow region), with short filler shoots between clumps.
+- Dense, deterministic, jittered tuft placement with short filler shoots between clumps.
 - Each blade is curved geometry with a tapered point and folded cross-section; no grass-card textures.
-- Separate height and color variation for meadow blades, plus a GPU TSL wind deformation and interactive wind-strength control.
-- A single merged grass mesh/draw call; the current demo favors close-up appearance over very large-world scalability.
+- A multi-lobed pond outline inspired by the source garden's distance-field layout, with an irregular gravel/silt margin.
+- The pond surface uses a procedural equirectangular sky environment, physically based clearcoat, and five animated ripple scales in a repeating bump map.
+- TSL vertex deformation animates the grass wind; the pond ripples animate independently.
 
-The original garden's custom virtual-geometry renderer, global illumination, streaming system, exact garden plan, and tree/plant models are not included. An exact visual match requires porting much more than the grass generator, including the original renderer and scene assets. This demo is an independently implemented Three.js approximation and does not include Solstice scene assets.
+The original renderer's screen-space scene reflections, refraction, depth-aware shoreline fade, global illumination, and exact garden scene are not reproduced here. The pond is a Three.js approximation: it reflects a procedural sky environment, not the live trees and shoreline. An exact visual match requires porting much more than the water shader and scene layout.
 
 ## License and attribution
 

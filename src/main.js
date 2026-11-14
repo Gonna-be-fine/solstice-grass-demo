@@ -14,7 +14,6 @@ scene.background = new THREE.Color('#a9b9ae');
 scene.fog = new THREE.FogExp2('#a9b9ae', 0.0125);
 
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 180);
-// A higher, wider opening view better matches the reference garden composition.
 camera.position.set(17, 17, 25);
 
 const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -46,6 +45,7 @@ sun.shadow.bias = -0.00015;
 
 const rng = makeRng(78123);
 const wind = uniform(0.62);
+let pondNormalTexture;
 
 function makeRng(seed) {
   let state = seed >>> 0;
@@ -64,6 +64,25 @@ function terrainY(x, z) {
     + Math.sin(x * 0.73) * Math.cos(z * 0.56) * 0.06 - 0.18;
 }
 
+// A smooth union of two pond lobes, an inlet and a small bay, based on the
+// source garden's signed-distance layout. Positive values are dry land.
+function smoothMin(a, b, k) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+function pondDistance(x, z) {
+  const circle = (cx, cz, r) => Math.hypot(x - cx, z - cz) - r;
+  let d = smoothMin(circle(-6.6, 0.4, 8.3), circle(9.2, 0.2, 6.1), 2.5);
+  d = smoothMin(d, circle(-11.6, 7.2, 4.3), 2.5);
+  d = smoothMin(d, circle(13.4, -5.2, 3.1), 2.0);
+  const ax = -1.5, az = 0.3, bx = 5.5, bz = 0.3;
+  const vx = bx - ax, vz = bz - az;
+  const t = THREE.MathUtils.clamp(((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz), 0, 1);
+  d = smoothMin(d, Math.hypot(x - (ax + vx * t), z - (az + vz * t)) - 2.1, 1.5);
+  const noise = Math.sin(x * 0.51 + z * 0.31) * 0.11 + Math.sin(x * 1.8 - z * 1.3) * 0.035;
+  return d + noise;
+}
+
 function createGround() {
   const geometry = new THREE.PlaneGeometry(66, 66, 170, 170);
   geometry.rotateX(-Math.PI / 2);
@@ -79,9 +98,121 @@ function createGround() {
   scene.add(ground);
 }
 
+function createSkyEnvironment() {
+  // A small procedural equirectangular sky provides a coherent reflected sky
+  // gradient and warm sun glint without external HDR assets.
+  const image = document.createElement('canvas');
+  image.width = 512;
+  image.height = 256;
+  const ctx = image.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, image.height);
+  gradient.addColorStop(0, '#647b80');
+  gradient.addColorStop(0.42, '#a8b8a8');
+  gradient.addColorStop(0.7, '#e1cba3');
+  gradient.addColorStop(1, '#718078');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, image.width, image.height);
+  const glow = ctx.createRadialGradient(346, 155, 2, 346, 155, 78);
+  glow.addColorStop(0, 'rgba(255,232,179,0.92)');
+  glow.addColorStop(0.12, 'rgba(255,220,157,0.42)');
+  glow.addColorStop(1, 'rgba(255,220,157,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(260, 70, 172, 172);
+  const environment = new THREE.CanvasTexture(image);
+  environment.mapping = THREE.EquirectangularReflectionMapping;
+  environment.colorSpace = THREE.SRGBColorSpace;
+  scene.environment = environment;
+}
+
+function makePondShape(scale = 1) {
+  const shape = new THREE.Shape();
+  // ShapeGeometry is rotated into the XZ plane, so negate the garden's Z values.
+  const move = (x, z) => shape.moveTo(x * scale, -z * scale);
+  const curve = (x1, z1, x2, z2, x, z) => shape.bezierCurveTo(x1 * scale, -z1 * scale, x2 * scale, -z2 * scale, x * scale, -z * scale);
+  move(-13.8, -1.0);
+  curve(-14.7, 3.7, -11.2, 8.6, -7.0, 8.4);
+  curve(-3.9, 8.3, -1.5, 5.7, 0.3, 3.0);
+  curve(3.0, 7.0, 8.7, 7.6, 11.6, 3.7);
+  curve(14.8, 0.5, 14.0, -3.2, 12.0, -5.1);
+  curve(10.2, -7.0, 7.6, -7.2, 5.5, -5.9);
+  curve(3.8, -4.8, 2.4, -3.0, 0.4, -2.7);
+  curve(-2.2, -5.8, -6.5, -7.1, -9.6, -5.7);
+  curve(-12.2, -4.5, -14.1, -3.0, -13.8, -1.0);
+  shape.closePath();
+  return shape;
+}
+
+function createWaterBump() {
+  const size = 256;
+  const image = document.createElement('canvas');
+  image.width = image.height = size;
+  const ctx = image.getContext('2d');
+  const pixels = ctx.createImageData(size, size);
+  const directions = [
+    [0.966, 0.259, 1.9, 1.0],
+    [0.743, -0.669, 1.1, 0.62],
+    [0.208, 0.978, 0.63, 0.34],
+    [-0.588, 0.809, 0.37, 0.2],
+    [0.951, -0.309, 0.21, 0.1],
+  ];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let value = 0;
+      for (const [dx, dz, wavelength, amplitude] of directions) {
+        const phase = ((x * dx + y * dz) / size) * (Math.PI * 2 / wavelength);
+        value += Math.sin(phase) * amplitude;
+      }
+      const level = Math.max(0, Math.min(255, 128 + value * 11));
+      const i = (y * size + x) * 4;
+      pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = level;
+      pixels.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+  const texture = new THREE.CanvasTexture(image);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 5);
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function createPond() {
+  const shape = makePondShape();
+  // The exposed outer lip is a soft gravel/silt margin; the water sheet hides
+  // its inner part, leaving an irregular rather than circular shoreline.
+  const bank = new THREE.Mesh(
+    new THREE.ShapeGeometry(makePondShape(1.085), 3),
+    new THREE.MeshStandardMaterial({ color: '#a39671', roughness: 1, side: THREE.DoubleSide }),
+  );
+  bank.rotation.x = -Math.PI / 2;
+  bank.position.set(0, -0.035, -1);
+  bank.receiveShadow = true;
+  scene.add(bank);
+
+  pondNormalTexture = createWaterBump();
+  const water = new THREE.Mesh(
+    new THREE.ShapeGeometry(shape, 4),
+    new THREE.MeshPhysicalMaterial({
+      color: '#647e72',
+      roughness: 0.12,
+      metalness: 0.04,
+      clearcoat: 1,
+      clearcoatRoughness: 0.08,
+      bumpMap: pondNormalTexture,
+      bumpScale: 0.055,
+      envMapIntensity: 1.25,
+      side: THREE.DoubleSide,
+    }),
+  );
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(0, 0.025, -1);
+  water.receiveShadow = true;
+  scene.add(water);
+  return water;
+}
+
 function createMeadow() {
-  // The earlier draft used ~6 tufts/m². Solstice's meadow is an actual dense sward;
-  // this finer jittered grid raises the coverage to ~25 tufts/m² before blades are added.
   const cell = 0.20;
   const tufts = [];
   for (let z = -23; z < 22; z += cell) {
@@ -89,16 +220,14 @@ function createMeadow() {
       const px = x + (rng() - 0.5) * cell * 0.9;
       const pz = z + (rng() - 0.5) * cell * 0.9;
       if ((px / 26) ** 2 + (pz / 23) ** 2 > 0.94) continue;
-      const pond = (px / 9.0) ** 2 + ((pz + 1.0) / 5.2) ** 2;
+      if (pondDistance(px, pz) < 0.75) continue;
       const path = Math.abs(pz - (7.4 + Math.sin(px * 0.19) * 0.9));
-      if (pond < 1.28 || path < 1.0) continue;
+      if (path < 1.0) continue;
       const count = 7 + Math.floor(rng() * 5);
       tufts.push({ x: px, z: pz, count, kind: rng() });
     }
   }
 
-  // Each blade has three folded cross-sections plus a pointed tip. This gives a
-  // shallow V-fold that catches light, rather than a flat, uniform ribbon/card.
   const rows = [0, 0.42, 0.78];
   const verticesPerBlade = rows.length * 3 + 1;
   const blades = tufts.reduce((sum, tuft) => sum + tuft.count + 3, 0);
@@ -107,7 +236,6 @@ function createMeadow() {
   const phases = new Float32Array(blades * verticesPerBlade);
   const bends = new Float32Array(blades * verticesPerBlade);
   const rootYs = new Float32Array(blades * verticesPerBlade);
-  // 8 quads between the folded rows and 2 triangles into the tip.
   const indices = new Uint32Array(blades * 30);
   const shades = [
     new THREE.Color('#314b2b'),
@@ -136,11 +264,7 @@ function createMeadow() {
       const cz = rootZ + bendZ * curve;
       const half = width * 0.5 * (1 - t * t * 0.88);
       const foldDepth = fold * half;
-      const cross = [
-        [-half, foldDepth * 0.3],
-        [0, -foldDepth],
-        [half, foldDepth * 0.3],
-      ];
+      const cross = [[-half, foldDepth * 0.3], [0, -foldDepth], [half, foldDepth * 0.3]];
       for (let k = 0; k < 3; k++) {
         const v = vertex++;
         positions[v * 3] = cx + sideX * cross[k][0] + bendX * cross[k][1];
@@ -187,7 +311,6 @@ function createMeadow() {
     const tuftHeight = tall ? 0.62 + rng() * 0.22 : 0.28 + rng() * 0.30;
     const fold = 0.13 + rng() * 0.10;
     for (let b = 0; b < tuft.count; b++) {
-      // A crown of blades fans out from a small root area; outer leaves lean farther.
       const angle = tuftAngle + rng() * Math.PI * 2;
       const reach = Math.sqrt(rng()) * reachMax;
       const rootX = tuft.x + Math.cos(angle) * reach;
@@ -198,7 +321,6 @@ function createMeadow() {
       const width = 0.014 + rng() * 0.012;
       addBlade(rootX, rootZ, height, width, lean, angle, rng() * Math.PI * 2, baseColor, fold);
     }
-    // Short shoots between the clumps hide the ground and soften the patch edges.
     for (let b = 0; b < 3; b++) {
       const angle = rng() * Math.PI * 2;
       const rootX = tuft.x + Math.cos(angle) * rng() * 0.11;
@@ -217,12 +339,7 @@ function createMeadow() {
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeVertexNormals();
 
-  const material = new THREE.MeshStandardNodeMaterial({
-    color: '#ffffff',
-    vertexColors: true,
-    roughness: 0.88,
-    side: THREE.DoubleSide,
-  });
+  const material = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.88, side: THREE.DoubleSide });
   const phase = attribute('aPhase', 'float');
   const bend = attribute('aBend', 'float');
   const rootY = attribute('aRootY', 'float');
@@ -236,22 +353,6 @@ function createMeadow() {
   grass.castShadow = true;
   grass.receiveShadow = true;
   scene.add(grass);
-}
-
-function createPond() {
-  const water = new THREE.Mesh(
-    new THREE.CircleGeometry(1, 96),
-    new THREE.MeshPhysicalMaterial({ color: '#536f67', roughness: 0.16, metalness: 0.12, clearcoat: 0.8, clearcoatRoughness: 0.12 }),
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.scale.set(9.2, 5.4, 1);
-  water.position.set(0, -0.04, -1);
-  scene.add(water);
-  const bank = new THREE.Mesh(new THREE.RingGeometry(8.9, 10.1, 96), new THREE.MeshStandardMaterial({ color: '#8b8061', roughness: 1, side: THREE.DoubleSide }));
-  bank.rotation.x = -Math.PI / 2;
-  bank.scale.y = 0.59;
-  bank.position.set(0, -0.04, -1);
-  scene.add(bank);
 }
 
 function createTrees() {
@@ -268,7 +369,7 @@ function createTrees() {
     const radius = 20 + rng() * 8;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius - 1;
-    if ((x / 9) ** 2 + ((z + 1) / 5.2) ** 2 < 2.0) continue;
+    if (pondDistance(x, z) < 2.0) continue;
     const scale = 0.75 + rng() * 1.0;
     dummy.position.set(x, terrainY(x, z) + 1.95 * scale, z);
     dummy.scale.set(scale, scale * (1.35 + rng() * 0.45), scale);
@@ -297,25 +398,28 @@ function createFlowers() {
   const stems = new THREE.InstancedMesh(stemGeometry, stemMaterial, 360);
   const heads = new THREE.InstancedMesh(headGeometry, headMaterial, 360);
   const dummy = new THREE.Object3D();
-  for (let i = 0; i < 360; i++) {
-    let x, z;
-    do {
-      x = (rng() - 0.5) * 43;
-      z = (rng() - 0.5) * 38;
-    } while ((x / 26) ** 2 + (z / 23) ** 2 > 0.88 || (x / 9) ** 2 + ((z + 1) / 5.2) ** 2 < 1.5 || Math.abs(z - (7.4 + Math.sin(x * 0.19) * 0.9)) < 1.3);
+  let placed = 0;
+  let attempts = 0;
+  while (placed < 360 && attempts++ < 5000) {
+    const x = (rng() - 0.5) * 43;
+    const z = (rng() - 0.5) * 38;
+    if ((x / 26) ** 2 + (z / 23) ** 2 > 0.88 || pondDistance(x, z) < 1.1 || Math.abs(z - (7.4 + Math.sin(x * 0.19) * 0.9)) < 1.3) continue;
     const y = terrainY(x, z);
     const size = 0.55 + rng() * 0.9;
     dummy.position.set(x, y + 0.11 * size, z);
     dummy.scale.setScalar(size);
     dummy.rotation.set(0, rng() * Math.PI * 2, (rng() - 0.5) * 0.16);
     dummy.updateMatrix();
-    stems.setMatrixAt(i, dummy.matrix);
+    stems.setMatrixAt(placed, dummy.matrix);
     dummy.position.y += 0.13 * size;
     dummy.scale.setScalar(size * 0.78);
     dummy.updateMatrix();
-    heads.setMatrixAt(i, dummy.matrix);
-    if (rng() > 0.83) heads.setColorAt(i, new THREE.Color('#d99e61'));
+    heads.setMatrixAt(placed, dummy.matrix);
+    if (rng() > 0.83) heads.setColorAt(placed, new THREE.Color('#d99e61'));
+    placed++;
   }
+  stems.count = placed;
+  heads.count = placed;
   stems.castShadow = true;
   heads.castShadow = true;
   scene.add(stems, heads);
@@ -338,15 +442,22 @@ function createPath() {
 async function main() {
   try {
     await renderer.init();
+    createSkyEnvironment();
     createGround();
-    createPond();
+    const pond = createPond();
     createPath();
     createMeadow();
     createFlowers();
     createTrees();
     loading.hidden = true;
+    const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
+      const delta = Math.min(clock.getDelta(), 0.05);
       controls.update();
+      if (pondNormalTexture) {
+        pondNormalTexture.offset.x = (pondNormalTexture.offset.x + delta * 0.012) % 1;
+        pondNormalTexture.offset.y = (pondNormalTexture.offset.y - delta * 0.007) % 1;
+      }
       renderer.render(scene, camera);
     });
   } catch (error) {
