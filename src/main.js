@@ -14,7 +14,8 @@ scene.background = new THREE.Color('#a9b9ae');
 scene.fog = new THREE.FogExp2('#a9b9ae', 0.0125);
 
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 180);
-camera.position.set(13, 8.5, 23);
+// A higher, wider opening view better matches the reference garden composition.
+camera.position.set(17, 17, 25);
 
 const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
@@ -23,7 +24,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 
 const controls = new OrbitControls(camera, canvas);
-controls.target.set(0, 1.1, -1.5);
+controls.target.set(0, 0.6, -1.5);
 controls.enableDamping = true;
 controls.dampingFactor = 0.055;
 controls.minDistance = 8;
@@ -57,6 +58,12 @@ function makeRng(seed) {
   };
 }
 
+function terrainY(x, z) {
+  return Math.sin(x * 0.16 + z * 0.08) * 0.32
+    + Math.cos(z * 0.19 - x * 0.07) * 0.24
+    + Math.sin(x * 0.73) * Math.cos(z * 0.56) * 0.06 - 0.18;
+}
+
 function createGround() {
   const geometry = new THREE.PlaneGeometry(66, 66, 170, 170);
   geometry.rotateX(-Math.PI / 2);
@@ -64,94 +71,140 @@ function createGround() {
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getZ(i);
-    const broad = Math.sin(x * 0.16 + z * 0.08) * 0.32 + Math.cos(z * 0.19 - x * 0.07) * 0.24;
-    const small = Math.sin(x * 0.73) * Math.cos(z * 0.56) * 0.06;
-    positions.setY(i, broad + small - 0.18);
+    positions.setY(i, terrainY(x, z));
   }
   geometry.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({ color: '#66764a', roughness: 1 });
-  const ground = new THREE.Mesh(geometry, material);
+  const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#66764a', roughness: 1 }));
   ground.receiveShadow = true;
   scene.add(ground);
 }
 
-function terrainY(x, z) {
-  return Math.sin(x * 0.16 + z * 0.08) * 0.32 + Math.cos(z * 0.19 - x * 0.07) * 0.24 + Math.sin(x * 0.73) * Math.cos(z * 0.56) * 0.06 - 0.18;
-}
-
 function createMeadow() {
-  const cell = 0.39;
+  // The earlier draft used ~6 tufts/m². Solstice's meadow is an actual dense sward;
+  // this finer jittered grid raises the coverage to ~25 tufts/m² before blades are added.
+  const cell = 0.20;
   const tufts = [];
   for (let z = -23; z < 22; z += cell) {
     for (let x = -26; x < 26; x += cell) {
-      const px = x + (rng() - 0.5) * cell * 0.8;
-      const pz = z + (rng() - 0.5) * cell * 0.8;
+      const px = x + (rng() - 0.5) * cell * 0.9;
+      const pz = z + (rng() - 0.5) * cell * 0.9;
       if ((px / 26) ** 2 + (pz / 23) ** 2 > 0.94) continue;
-      // A softly irregular pond opening and a gravel walk around it.
       const pond = (px / 9.0) ** 2 + ((pz + 1.0) / 5.2) ** 2;
       const path = Math.abs(pz - (7.4 + Math.sin(px * 0.19) * 0.9));
       if (pond < 1.28 || path < 1.0) continue;
-      const count = 7 + Math.floor(rng() * 6);
+      const count = 7 + Math.floor(rng() * 5);
       tufts.push({ x: px, z: pz, count, kind: rng() });
     }
   }
 
-  const blades = tufts.reduce((sum, tuft) => sum + tuft.count, 0);
-  const rows = 4;
-  const verticesPerBlade = rows * 2;
+  // Each blade has three folded cross-sections plus a pointed tip. This gives a
+  // shallow V-fold that catches light, rather than a flat, uniform ribbon/card.
+  const rows = [0, 0.42, 0.78];
+  const verticesPerBlade = rows.length * 3 + 1;
+  const blades = tufts.reduce((sum, tuft) => sum + tuft.count + 3, 0);
   const positions = new Float32Array(blades * verticesPerBlade * 3);
   const colors = new Float32Array(blades * verticesPerBlade * 3);
   const phases = new Float32Array(blades * verticesPerBlade);
   const bends = new Float32Array(blades * verticesPerBlade);
-  const indices = new Uint32Array(blades * (rows - 1) * 6);
+  const rootYs = new Float32Array(blades * verticesPerBlade);
+  // 8 quads between the folded rows and 2 triangles into the tip.
+  const indices = new Uint32Array(blades * 30);
+  const shades = [
+    new THREE.Color('#314b2b'),
+    new THREE.Color('#405e33'),
+    new THREE.Color('#54703b'),
+    new THREE.Color('#6e8043'),
+    new THREE.Color('#92904c'),
+  ];
   let vertex = 0;
   let index = 0;
 
-  const shades = [new THREE.Color('#41683a'), new THREE.Color('#628344'), new THREE.Color('#76914a'), new THREE.Color('#9c9950')];
+  const addBlade = (rootX, rootZ, height, width, lean, angle, phase, baseColor, fold) => {
+    const rootY = terrainY(rootX, rootZ);
+    const bendAngle = angle + (rng() - 0.5) * 0.62;
+    const bendX = Math.cos(bendAngle);
+    const bendZ = Math.sin(bendAngle);
+    const sideX = -Math.sin(angle);
+    const sideZ = Math.cos(angle);
+    const first = vertex;
+    const colorJitter = 0.82 + rng() * 0.38;
+
+    for (let row = 0; row < rows.length; row++) {
+      const t = rows[row];
+      const curve = t * t * lean * height;
+      const cx = rootX + bendX * curve;
+      const cz = rootZ + bendZ * curve;
+      const half = width * 0.5 * (1 - t * t * 0.88);
+      const foldDepth = fold * half;
+      const cross = [
+        [-half, foldDepth * 0.3],
+        [0, -foldDepth],
+        [half, foldDepth * 0.3],
+      ];
+      for (let k = 0; k < 3; k++) {
+        const v = vertex++;
+        positions[v * 3] = cx + sideX * cross[k][0] + bendX * cross[k][1];
+        positions[v * 3 + 1] = rootY + t * height;
+        positions[v * 3 + 2] = cz + sideZ * cross[k][0] + bendZ * cross[k][1];
+        const light = colorJitter * (0.78 + t * 0.34 + (k === 1 ? 0.1 : 0));
+        colors[v * 3] = baseColor.r * light;
+        colors[v * 3 + 1] = baseColor.g * light;
+        colors[v * 3 + 2] = baseColor.b * light;
+        phases[v] = phase;
+        bends[v] = lean;
+        rootYs[v] = rootY;
+      }
+    }
+    const tip = vertex++;
+    const tipCurve = lean * height;
+    positions[tip * 3] = rootX + bendX * tipCurve;
+    positions[tip * 3 + 1] = rootY + height;
+    positions[tip * 3 + 2] = rootZ + bendZ * tipCurve;
+    colors[tip * 3] = baseColor.r * colorJitter * 1.04;
+    colors[tip * 3 + 1] = baseColor.g * colorJitter * 1.04;
+    colors[tip * 3 + 2] = baseColor.b * colorJitter * 1.04;
+    phases[tip] = phase;
+    bends[tip] = lean;
+    rootYs[tip] = rootY;
+
+    for (let row = 0; row < rows.length - 1; row++) {
+      const a = first + row * 3;
+      const b = a + 3;
+      indices.set([a, a + 1, b, a + 1, b + 1, b, a + 1, a + 2, b + 1, a + 2, b + 2, b + 1], index);
+      index += 12;
+    }
+    const last = first + (rows.length - 1) * 3;
+    indices.set([last, last + 1, tip, last + 1, last + 2, tip], index);
+    index += 6;
+  };
+
   for (const tuft of tufts) {
-    const baseY = terrainY(tuft.x, tuft.z);
-    const colorPick = rng();
-    const baseColor = colorPick < 0.52 ? shades[0] : colorPick < 0.84 ? shades[1] : colorPick < 0.96 ? shades[2] : shades[3];
-    const tuftHeight = tuft.kind < 0.2 ? 0.7 : 0.34 + rng() * 0.36;
+    const tuftAngle = rng() * Math.PI * 2;
+    const reachMax = 0.055;
+    const colorRoll = rng();
+    const baseColor = colorRoll < 0.45 ? shades[0] : colorRoll < 0.76 ? shades[1] : colorRoll < 0.93 ? shades[2] : shades[3];
+    const tall = tuft.kind < 0.18;
+    const tuftHeight = tall ? 0.62 + rng() * 0.22 : 0.28 + rng() * 0.30;
+    const fold = 0.13 + rng() * 0.10;
     for (let b = 0; b < tuft.count; b++) {
-      const angle = rng() * Math.PI * 2;
-      const reach = Math.sqrt(rng()) * 0.13;
+      // A crown of blades fans out from a small root area; outer leaves lean farther.
+      const angle = tuftAngle + rng() * Math.PI * 2;
+      const reach = Math.sqrt(rng()) * reachMax;
       const rootX = tuft.x + Math.cos(angle) * reach;
       const rootZ = tuft.z + Math.sin(angle) * reach;
-      const height = tuftHeight * (0.66 + rng() * 0.55);
-      const width = 0.018 + rng() * 0.023;
-      const lean = 0.12 + rng() * 0.27;
-      const bendAngle = angle + (rng() - 0.5) * 1.3;
-      const phase = rng() * Math.PI * 2;
-      const bladeColor = baseColor.clone().multiplyScalar(0.82 + rng() * 0.38);
-      for (let row = 0; row < rows; row++) {
-        const t = row / (rows - 1);
-        const curve = t * t * lean * height;
-        const centerX = rootX + Math.cos(bendAngle) * curve;
-        const centerZ = rootZ + Math.sin(bendAngle) * curve;
-        const halfWidth = width * (1 - t) * (1 - t * 0.72);
-        const sideX = -Math.sin(angle) * halfWidth;
-        const sideZ = Math.cos(angle) * halfWidth;
-        for (let side = 0; side < 2; side++) {
-          const offset = side === 0 ? -1 : 1;
-          const v = vertex++;
-          positions[v * 3] = centerX + sideX * offset;
-          positions[v * 3 + 1] = baseY + t * height;
-          positions[v * 3 + 2] = centerZ + sideZ * offset;
-          const light = 0.83 + t * 0.28 + (side ? 0.035 : -0.025);
-          colors[v * 3] = bladeColor.r * light;
-          colors[v * 3 + 1] = bladeColor.g * light;
-          colors[v * 3 + 2] = bladeColor.b * light;
-          phases[v] = phase;
-          bends[v] = lean;
-        }
-      }
-      const first = vertex - verticesPerBlade;
-      for (let row = 0; row < rows - 1; row++) {
-        const a = first + row * 2;
-        indices.set([a, a + 1, a + 2, a + 1, a + 3, a + 2], index);
-        index += 6;
-      }
+      const outer = reach / reachMax;
+      const height = tuftHeight * (0.68 + rng() * 0.48);
+      const lean = Math.min(0.82, 0.10 + outer * 0.38 + rng() * 0.22);
+      const width = 0.014 + rng() * 0.012;
+      addBlade(rootX, rootZ, height, width, lean, angle, rng() * Math.PI * 2, baseColor, fold);
+    }
+    // Short shoots between the clumps hide the ground and soften the patch edges.
+    for (let b = 0; b < 3; b++) {
+      const angle = rng() * Math.PI * 2;
+      const rootX = tuft.x + Math.cos(angle) * rng() * 0.11;
+      const rootZ = tuft.z + Math.sin(angle) * rng() * 0.11;
+      const shortColor = shades[rng() < 0.55 ? 0 : 1];
+      addBlade(rootX, rootZ, 0.08 + rng() * 0.13, 0.009 + rng() * 0.006, 0.16 + rng() * 0.25, angle, rng() * Math.PI * 2, shortColor, 0.1);
     }
   }
 
@@ -160,21 +213,24 @@ function createMeadow() {
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
   geometry.setAttribute('aBend', new THREE.BufferAttribute(bends, 1));
+  geometry.setAttribute('aRootY', new THREE.BufferAttribute(rootYs, 1));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeVertexNormals();
 
   const material = new THREE.MeshStandardNodeMaterial({
     color: '#ffffff',
     vertexColors: true,
-    roughness: 0.82,
+    roughness: 0.88,
     side: THREE.DoubleSide,
   });
   const phase = attribute('aPhase', 'float');
   const bend = attribute('aBend', 'float');
+  const rootY = attribute('aRootY', 'float');
+  const localHeight = positionLocal.y.sub(rootY).max(0);
   const gust = sin(positionLocal.x.mul(0.18).add(positionLocal.z.mul(0.12)).sub(time.mul(1.15)).add(phase));
   const flutter = cos(time.mul(2.4).add(phase.mul(1.7)));
-  const sway = gust.add(flutter.mul(0.22)).mul(bend).mul(wind).mul(positionLocal.y);
-  material.positionNode = positionLocal.add(vec3(sway.mul(0.9), sway.mul(-0.13), sway.mul(0.42)));
+  const sway = gust.add(flutter.mul(0.18)).mul(bend).mul(wind).mul(localHeight);
+  material.positionNode = positionLocal.add(vec3(sway.mul(0.9), sway.mul(-0.10), sway.mul(0.42)));
 
   const grass = new THREE.Mesh(geometry, material);
   grass.castShadow = true;
@@ -190,7 +246,6 @@ function createPond() {
   water.rotation.x = -Math.PI / 2;
   water.scale.set(9.2, 5.4, 1);
   water.position.set(0, -0.04, -1);
-  water.receiveShadow = true;
   scene.add(water);
   const bank = new THREE.Mesh(new THREE.RingGeometry(8.9, 10.1, 96), new THREE.MeshStandardMaterial({ color: '#8b8061', roughness: 1, side: THREE.DoubleSide }));
   bank.rotation.x = -Math.PI / 2;
@@ -224,8 +279,7 @@ function createTrees() {
     dummy.scale.multiplyScalar(2.2);
     dummy.updateMatrix();
     canopy.setMatrixAt(n, dummy.matrix);
-    const tint = new THREE.Color().setHSL(0.29 + rng() * 0.045, 0.24 + rng() * 0.15, 0.24 + rng() * 0.12);
-    canopy.setColorAt(n, tint);
+    canopy.setColorAt(n, new THREE.Color().setHSL(0.29 + rng() * 0.045, 0.24 + rng() * 0.15, 0.24 + rng() * 0.12));
     n++;
   }
   trunk.count = n;
@@ -275,8 +329,7 @@ function createPath() {
     points.push(new THREE.Vector3(x, terrainY(x, z) + 0.015, z));
   }
   const curve = new THREE.CatmullRomCurve3(points);
-  const geometry = new THREE.TubeGeometry(curve, 160, 0.62, 7, false);
-  const path = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#9b8e6e', roughness: 1 }));
+  const path = new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.62, 7, false), new THREE.MeshStandardMaterial({ color: '#9b8e6e', roughness: 1 }));
   path.scale.y = 0.08;
   path.receiveShadow = true;
   scene.add(path);
