@@ -1,8 +1,10 @@
 import * as THREE from 'three/webgpu';
-import { attribute, cos, positionLocal, sin, time, vec3 } from 'three/tsl';
+import { attribute, cos, positionLocal, sin, time, vec3, positionView, faceDirection } from 'three/tsl';
 
 const PI2 = Math.PI * 2;
-const ROWS = [0, 0.4, 0.75];
+// More lengthwise sections keep the curved blade silhouette from collapsing into
+// a few visibly straight segments when viewed close up or from above.
+const ROWS = [0, 0.2, 0.4, 0.6, 0.8];
 const INSTANCE_STRIDE = 14;
 
 const PALETTES = {
@@ -106,6 +108,11 @@ function makeMaterial(wind) {
   const localZ = root.z.add(sideZ.mul(across).mul(width)).add(bendZ.mul(foldDistance)).add(bendZ.mul(curve)).add(windReach.mul(0.32));
   const localY = root.y.add(t.mul(height)).sub(windReach.mul(0.04));
   material.positionNode = vec3(localX, localY, localZ);
+
+  // Derive the shading normal from the rasterized, deformed surface. This keeps
+  // wind and blade curvature in sync with lighting, including when orbiting
+  // above the grass. faceDirection preserves correct two-sided lighting.
+  material.normalNode = positionView.dFdx().cross(positionView.dFdy()).normalize().mul(faceDirection);
   return material;
 }
 
