@@ -7,18 +7,16 @@ const INSTANCE_STRIDE = 14;
 
 const PALETTES = {
   lawn: [new THREE.Color('#35552e'), new THREE.Color('#496c37'), new THREE.Color('#5b783d'), new THREE.Color('#8a8750')],
-  meadow: [new THREE.Color('#29472a'), new THREE.Color('#3b5d32'), new THREE.Color('#4e6d39'), new THREE.Color('#6e8044'), new THREE.Color('#928f4d')],
-  rough: [new THREE.Color('#314a28'), new THREE.Color('#435b30'), new THREE.Color('#63713a'), new THREE.Color('#a09254')],
+  meadow: [new THREE.Color('#2d4f35'), new THREE.Color('#456f42'), new THREE.Color('#5e8054'), new THREE.Color('#83986c'), new THREE.Color('#a29d74')],
+  rough: [new THREE.Color('#364c2d'), new THREE.Color('#4d6037'), new THREE.Color('#6d763a'), new THREE.Color('#a1915a')],
 };
 
 const BREEDS = {
-  lawn: { tufts: [6, 12], height: [0.045, 0.08], width: [0.0035, 0.0055], lean: [0.05, 0.45], fill: 240 },
-  meadow: { tufts: [8, 20], height: [0.25, 0.60], width: [0.005, 0.009], lean: [0.12, 0.82], fill: 420 },
-  rough: { tufts: [12, 26], height: [0.55, 1.05], width: [0.008, 0.014], lean: [0.20, 0.85], fill: 240 },
+  lawn: { tufts: [6, 12], height: [0.035, 0.08], width: [0.0034, 0.0054], lean: [0.05, 0.42], fill: 200 },
+  meadow: { tufts: [10, 22], height: [0.16, 0.46], width: [0.0048, 0.0094], lean: [0.12, 0.78], fill: 480 },
+  rough: { tufts: [12, 24], height: [0.38, 0.9], width: [0.007, 0.012], lean: [0.18, 0.82], fill: 240 },
 };
 
-// All per-blade data shares one interleaved instance buffer. Separate attributes
-// would create more vertex buffers than WebGPU's portable limit allows.
 class BladeRecords {
   constructor() {
     this.capacity = 16384;
@@ -79,7 +77,7 @@ function makeBladeGeometry() {
 }
 
 function makeMaterial(wind) {
-  const material = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', roughness: 0.88, side: THREE.DoubleSide });
+  const material = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', roughness: 0.9, side: THREE.DoubleSide });
   const root = attribute('iRoot', 'vec3');
   const width = attribute('iWidth', 'float');
   const height = attribute('iHeight', 'float');
@@ -99,14 +97,14 @@ function makeMaterial(wind) {
   const bendZ = sin(bendAngle);
   const curve = t.mul(t).mul(lean).mul(height);
   const foldDistance = folded.mul(fold).mul(width);
-  const gust = sin(root.x.mul(0.095).add(root.z.mul(0.073)).sub(time.mul(0.72)).add(phase));
-  const roll = sin(root.x.mul(0.24).sub(root.z.mul(0.16)).sub(time.mul(1.13)).add(phase.mul(0.37)));
-  const shimmer = cos(time.mul(1.7).add(phase.mul(1.9))).mul(0.16);
-  const windAmount = gust.mul(0.64).add(roll.mul(0.25)).add(shimmer).mul(wind);
-  const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.16);
-  const localX = root.x.add(sideX.mul(across).mul(width)).add(bendX.mul(foldDistance)).add(bendX.mul(curve)).add(windReach.mul(0.94));
-  const localZ = root.z.add(sideZ.mul(across).mul(width)).add(bendZ.mul(foldDistance)).add(bendZ.mul(curve)).add(windReach.mul(0.34));
-  const localY = root.y.add(t.mul(height)).sub(windReach.mul(0.035));
+  const gust = sin(root.x.mul(0.075).add(root.z.mul(0.06)).sub(time.mul(0.6)).add(phase));
+  const roll = sin(root.x.mul(0.19).sub(root.z.mul(0.14)).sub(time.mul(1.0)).add(phase.mul(0.34)));
+  const shimmer = cos(time.mul(1.5).add(phase.mul(1.7))).mul(0.12);
+  const windAmount = gust.mul(0.6).add(roll.mul(0.25)).add(shimmer).mul(wind);
+  const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.14);
+  const localX = root.x.add(sideX.mul(across).mul(width)).add(bendX.mul(foldDistance)).add(bendX.mul(curve)).add(windReach.mul(0.9));
+  const localZ = root.z.add(sideZ.mul(across).mul(width)).add(bendZ.mul(foldDistance)).add(bendZ.mul(curve)).add(windReach.mul(0.32));
+  const localY = root.y.add(t.mul(height)).sub(windReach.mul(0.04));
   material.positionNode = vec3(localX, localY, localZ);
   return material;
 }
@@ -135,14 +133,20 @@ function distanceToPath(x, z) {
 function chooseBreed(x, z, pondDistance) {
   const shore = pondDistance(x, z);
   const path = distanceToPath(x, z);
-  if (shore > 0 && shore < 2.8 && Math.sin(x * 0.13 + z * 0.08) > -0.15) return 'rough';
-  if (Math.hypot(x, z) > 30 || path < 2.7) return 'lawn';
+  const woodEdge = Math.hypot(x, z);
+  if (shore > 0 && shore < 2.8 && Math.sin(x * 0.13 + z * 0.08) > -0.18) return 'rough';
+  if (woodEdge > 28 || path < 2.5) return 'lawn';
   return 'meadow';
 }
 
 function densityFor(breed, radius) {
   const tier = radius < 17 ? 0 : radius < 30 ? 1 : 2;
-  return { meadow: [46, 18, 6], lawn: [112, 42, 12], rough: [20, 10, 5] }[breed][tier];
+  const densities = {
+    meadow: [62, 30, 10],
+    lawn: [86, 38, 14],
+    rough: [26, 12, 6],
+  };
+  return densities[breed][tier];
 }
 
 function makeCellRng(seed) {
@@ -163,7 +167,7 @@ function growTuft(writer, rng, breedName, x, z, groundY) {
   const baseColor = palette[colorIndex];
   const count = Math.floor(range(rng, breed.tufts[0], breed.tufts[1] + 1));
   const centerAngle = rng() * PI2;
-  const tuftRadius = breedName === 'lawn' ? 0.025 : 0.045;
+  const tuftRadius = breedName === 'lawn' ? 0.023 : 0.042;
   const tuftHeight = range(rng, breed.height[0], breed.height[1]);
   const fold = breedName === 'lawn' ? 0.12 : 0.18;
 
@@ -177,7 +181,7 @@ function growTuft(writer, rng, breedName, x, z, groundY) {
     const lean = Math.min(0.9, range(rng, breed.lean[0], breed.lean[1]) * (0.65 + outer * 0.55));
     const width = range(rng, breed.width[0], breed.width[1]);
     const bendAngle = angle + range(rng, -0.55, 0.55);
-    const dryChance = breedName === 'meadow' ? 0.08 : breedName === 'rough' ? 0.12 : 0.025;
+    const dryChance = breedName === 'meadow' ? 0.08 : breedName === 'rough' ? 0.1 : 0.025;
     const color = rng() < dryChance ? PALETTES.rough[3] : baseColor;
     writer.add(rootX, groundY, rootZ, width, h, lean, angle, bendAngle, rng() * PI2, fold, color);
   }
@@ -193,9 +197,10 @@ function growUndergrowth(writer, rng, breedName, x, z, groundY) {
     const rootZ = z + Math.sin(angle) * radius;
     const color = palette[rng() < 0.68 ? 0 : 1];
     const height = breedName === 'lawn' ? range(rng, 0.025, 0.055)
-      : breedName === 'rough' ? range(rng, 0.10, 0.30)
+      : breedName === 'rough' ? range(rng, 0.1, 0.32)
       : range(rng, 0.05, 0.18);
-    writer.add(rootX, groundY, rootZ, range(rng, 0.003, 0.006), height, range(rng, 0.08, 0.5), angle,
+    writer.add(rootX, groundY, rootZ,
+      range(rng, 0.003, 0.006), height, range(rng, 0.08, 0.5), angle,
       angle + range(rng, -0.9, 0.9), rng() * PI2, 0.12, color);
   }
 }
@@ -203,7 +208,7 @@ function growUndergrowth(writer, rng, breedName, x, z, groundY) {
 function createGrass(scene, options) {
   const { rng, wind, terrainY, pondDistance } = options;
   const writers = { lawn: new BladeRecords(), meadow: new BladeRecords(), rough: new BladeRecords() };
-  const step = 0.14;
+  const step = 0.12;
   let cellIndex = 0;
   for (let z = -23; z < 22; z += step) {
     for (let x = -26; x < 26; x += step) {
@@ -211,15 +216,17 @@ function createGrass(scene, options) {
       const pz = z + (rng() - 0.5) * step * 0.92;
       const radius = Math.hypot(px, pz);
       if ((px / 26) ** 2 + (pz / 23) ** 2 > 0.94) continue;
-      if (pondDistance(px, pz) < 0.38) continue;
+      const shore = pondDistance(px, pz);
+      if (shore < 0.38) continue;
       const breedName = chooseBreed(px, pz, pondDistance);
-      const probability = Math.min(1, densityFor(breedName, radius) * step * step);
+      const targetDensity = densityFor(breedName, radius);
+      const probability = Math.min(1, targetDensity * step * step * (breedName === 'meadow' ? 1.2 : 1));
       const localRng = makeCellRng((cellIndex++ * 747796405 + 2891336453) >>> 0);
       if (localRng() > probability) continue;
       const groundY = terrainY(px, pz);
       const writer = writers[breedName];
       growTuft(writer, rng, breedName, px, pz, groundY);
-      const fillRate = radius < 17 ? 1 : radius < 30 ? 0.36 : 0.12;
+      const fillRate = radius < 17 ? 1 : radius < 30 ? 0.42 : 0.16;
       if (rng() < fillRate) growUndergrowth(writer, rng, breedName, px, pz, groundY);
     }
   }
@@ -240,3 +247,7 @@ function createGrass(scene, options) {
 }
 
 export { createGrass };
+
+export default {};
+
+
