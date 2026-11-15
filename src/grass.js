@@ -1,9 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { attribute, cos, positionLocal, sin, time, vec3, positionView, faceDirection } from 'three/tsl';
+import { bladeScale, bendScale } from './grass-settings.js';
 
 const PI2 = Math.PI * 2;
-// More lengthwise sections keep the curved blade silhouette from collapsing into
-// a few visibly straight segments when viewed close up or from above.
 const ROWS = [0, 0.2, 0.4, 0.6, 0.8];
 const INSTANCE_STRIDE = 14;
 
@@ -36,10 +35,7 @@ class BladeRecords {
   add(rootX, rootY, rootZ, width, height, lean, angle, bendAngle, phase, fold, color) {
     if (this.count === this.capacity) this.grow();
     const offset = this.count * INSTANCE_STRIDE;
-    this.data.set([
-      rootX, rootY, rootZ, width, height, lean, angle,
-      bendAngle, phase, fold, ...color.toArray(),
-    ], offset);
+    this.data.set([rootX, rootY, rootZ, width, height, lean, angle, bendAngle, phase, fold, ...color.toArray()], offset);
     this.count++;
   }
 
@@ -81,13 +77,13 @@ function makeBladeGeometry() {
 function makeMaterial(wind) {
   const material = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', roughness: 0.9, side: THREE.DoubleSide });
   const root = attribute('iRoot', 'vec3');
-  const width = attribute('iWidth', 'float');
-  const height = attribute('iHeight', 'float');
+  const width = attribute('iWidth', 'float').mul(bladeScale);
+  const height = attribute('iHeight', 'float').mul(bladeScale);
   const lean = attribute('iLean', 'float');
   const angle = attribute('iAngle', 'float');
   const bendAngle = attribute('iBendAngle', 'float');
   const phase = attribute('iPhase', 'float');
-  const fold = attribute('iFold', 'float');
+  const fold = attribute('iFold', 'float').mul(bendScale);
   material.colorNode = attribute('iColor', 'vec3');
 
   const across = positionLocal.x;
@@ -97,21 +93,17 @@ function makeMaterial(wind) {
   const sideZ = cos(angle);
   const bendX = cos(bendAngle);
   const bendZ = sin(bendAngle);
-  const curve = t.mul(t).mul(lean).mul(height);
+  const curve = t.mul(t).mul(lean).mul(height).mul(bendScale);
   const foldDistance = folded.mul(fold).mul(width);
   const gust = sin(root.x.mul(0.075).add(root.z.mul(0.06)).sub(time.mul(0.6)).add(phase));
   const roll = sin(root.x.mul(0.19).sub(root.z.mul(0.14)).sub(time.mul(1.0)).add(phase.mul(0.34)));
   const shimmer = cos(time.mul(1.5).add(phase.mul(1.7))).mul(0.12);
   const windAmount = gust.mul(0.6).add(roll.mul(0.25)).add(shimmer).mul(wind);
-  const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.14);
+  const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.14).mul(bendScale);
   const localX = root.x.add(sideX.mul(across).mul(width)).add(bendX.mul(foldDistance)).add(bendX.mul(curve)).add(windReach.mul(0.9));
   const localZ = root.z.add(sideZ.mul(across).mul(width)).add(bendZ.mul(foldDistance)).add(bendZ.mul(curve)).add(windReach.mul(0.32));
   const localY = root.y.add(t.mul(height)).sub(windReach.mul(0.04));
   material.positionNode = vec3(localX, localY, localZ);
-
-  // Derive the shading normal from the rasterized, deformed surface. This keeps
-  // wind and blade curvature in sync with lighting, including when orbiting
-  // above the grass. faceDirection preserves correct two-sided lighting.
   material.normalNode = positionView.dFdx().cross(positionView.dFdy()).normalize().mul(faceDirection);
   return material;
 }
@@ -191,9 +183,6 @@ function growTuft(writer, rng, breedName, x, z, groundY) {
 }
 
 function growUndergrowth(writer, rng, breedName, x, z, groundY, densityScale) {
-  // `fill` is blades per square metre in the source breed descriptions, not
-  // hundreds of filler blades per tuft. Divide by the local tuft density to get
-  // a sane count for this tuft and scale it down with distance LOD.
   const tuftDensity = densityFor(breedName, Math.hypot(x, z));
   const count = Math.max(0, Math.round((BREEDS[breedName].fill / tuftDensity) * densityScale));
   const palette = PALETTES[breedName];
@@ -242,6 +231,7 @@ function createGrass(scene, options) {
 
   const bladeGeometry = makeBladeGeometry();
   const material = makeMaterial(wind);
+  const meshes = [];
   for (const [breed, writer] of Object.entries(writers)) {
     if (!writer.count) continue;
     const geometry = bladeGeometry.clone();
@@ -251,8 +241,18 @@ function createGrass(scene, options) {
     grass.castShadow = true;
     grass.receiveShadow = true;
     scene.add(grass);
+    meshes.push({ mesh: grass, fullCount: writer.count });
     console.info(`[grass] ${breed}: ${writer.count.toLocaleString()} instanced blades`);
   }
+
+  return {
+    setDensity(value) {
+      const density = THREE.MathUtils.clamp(value, 0.2, 1);
+      for (const { mesh, fullCount } of meshes) {
+        mesh.geometry.instanceCount = Math.max(1, Math.floor(fullCount * density));
+      }
+    },
+  };
 }
 
 export { createGrass };
