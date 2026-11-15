@@ -180,7 +180,14 @@ function createFlowers() {
 async function main() {
   try {
     await renderer.init(); createSkyEnvironment(); createGround(); createPond(); createPath();
-    createGrass(scene, { rng, wind, terrainY, pondDistance }); createFlowers(); createTrees(); loading.hidden = true;
+    createGrass(scene, { rng, wind, terrainY, pondDistance });
+    // Grass vertices are expanded from instance attributes in the shader. Their
+    // source geometry is a tiny blade around the origin, so its CPU bounds do not
+    // describe the rendered meadow. Disable that incorrect frustum test.
+    scene.traverse((object) => {
+      if (object.isMesh && object.name.includes('-grass-')) object.frustumCulled = false;
+    });
+    createFlowers(); createTrees(); loading.hidden = true;
     const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
       const delta = Math.min(clock.getDelta(), 0.05); controls.update();
