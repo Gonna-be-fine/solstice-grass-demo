@@ -3,29 +3,12 @@ import { attribute, cos, positionLocal, sin, time, vec3 } from 'three/tsl';
 
 const PI2 = Math.PI * 2;
 const ROWS = [0, 0.4, 0.75];
-const VERTICES_PER_BLADE = ROWS.length * 3 + 1;
 const INDICES_PER_BLADE = 30;
 
 const PALETTES = {
-  lawn: [
-    new THREE.Color('#35552e'),
-    new THREE.Color('#496c37'),
-    new THREE.Color('#5b783d'),
-    new THREE.Color('#8a8750'),
-  ],
-  meadow: [
-    new THREE.Color('#29472a'),
-    new THREE.Color('#3b5d32'),
-    new THREE.Color('#4e6d39'),
-    new THREE.Color('#6e8044'),
-    new THREE.Color('#928f4d'),
-  ],
-  rough: [
-    new THREE.Color('#314a28'),
-    new THREE.Color('#435b30'),
-    new THREE.Color('#63713a'),
-    new THREE.Color('#a09254'),
-  ],
+  lawn: [new THREE.Color('#35552e'), new THREE.Color('#496c37'), new THREE.Color('#5b783d'), new THREE.Color('#8a8750')],
+  meadow: [new THREE.Color('#29472a'), new THREE.Color('#3b5d32'), new THREE.Color('#4e6d39'), new THREE.Color('#6e8044'), new THREE.Color('#928f4d')],
+  rough: [new THREE.Color('#314a28'), new THREE.Color('#435b30'), new THREE.Color('#63713a'), new THREE.Color('#a09254')],
 };
 
 const BREEDS = {
@@ -34,16 +17,23 @@ const BREEDS = {
   rough: { tufts: [12, 26], height: [0.55, 1.05], width: [0.008, 0.014], lean: [0.20, 0.85], fill: 240 },
 };
 
-// Compact dynamically growing per-instance attributes; one blade is one GPU instance.
-// This keeps the procedural garden practical without allocating a separate Mesh per blade.
 class BladeRecords {
   constructor() {
     this.capacity = 16384;
     this.count = 0;
-    this.fields = Object.fromEntries([
-      ['iRoot', 3], ['iWidth', 1], ['iHeight', 1], ['iLean', 1],
-      ['iAngle', 1], ['iBendAngle', 1], ['iPhase', 1], ['iFold', 1], ['iColor', 3],
-    ].map(([name, size]) => [name, { size, data: new Float32Array(this.capacity * size) }]));
+    this.fields = Object.fromEntries(
+      Object.entries({
+        iRoot: 3,
+        iWidth: 1,
+        iHeight: 1,
+        iLean: 1,
+        iAngle: 1,
+        iBendAngle: 1,
+        iPhase: 1,
+        iFold: 1,
+        iColor: 3,
+      }).map(([name, size]) => [name, { size, data: new Float32Array(this.capacity * size) }]),
+    );
   }
 
   grow() {
@@ -58,9 +48,15 @@ class BladeRecords {
   add(rootX, rootY, rootZ, width, height, lean, angle, bendAngle, phase, fold, color) {
     if (this.count === this.capacity) this.grow();
     const values = {
-      iRoot: [rootX, rootY, rootZ], iWidth: [width], iHeight: [height],
-      iLean: [lean], iAngle: [angle], iBendAngle: [bendAngle],
-      iPhase: [phase], iFold: [fold], iColor: color.toArray(),
+      iRoot: [rootX, rootY, rootZ],
+      iWidth: [width],
+      iHeight: [height],
+      iLean: [lean],
+      iAngle: [angle],
+      iBendAngle: [bendAngle],
+      iPhase: [phase],
+      iFold: [fold],
+      iColor: color.toArray(),
     };
     for (const [name, value] of Object.entries(values)) {
       const field = this.fields[name];
@@ -82,11 +78,11 @@ function makeBladeGeometry() {
   const geometry = new THREE.InstancedBufferGeometry();
   const positions = [];
   const indices = [];
-  for (const t of ROWS) {
-    // Three points across the folded blade: left edge, raised midrib, right edge.
+  for (let row = 0; row < ROWS.length; row++) {
+    const t = ROWS[row];
     positions.push(-0.5, t, 0, 0, t, -0.18, 0.5, t, 0);
   }
-  positions.push(0, 1, 0); // pointed tip
+  positions.push(0, 1, 0);
   for (let row = 0; row < ROWS.length - 1; row++) {
     const a = row * 3;
     const b = a + 3;
@@ -94,7 +90,7 @@ function makeBladeGeometry() {
     indices.push(a + 1, a + 2, b + 1, a + 2, b + 2, b + 1);
   }
   const last = (ROWS.length - 1) * 3;
-  const tip = VERTICES_PER_BLADE - 1;
+  const tip = ROWS.length * 3;
   indices.push(last, last + 1, tip, last + 1, last + 2, tip);
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setIndex(indices);
@@ -102,7 +98,7 @@ function makeBladeGeometry() {
   return geometry;
 }
 
-function makeMaterial(wind) {
+function makeMaterial() {
   const material = new THREE.MeshStandardNodeMaterial({
     color: '#ffffff',
     roughness: 0.88,
@@ -127,13 +123,10 @@ function makeMaterial(wind) {
   const bendZ = sin(bendAngle);
   const curve = t.mul(t).mul(lean).mul(height);
   const foldDistance = folded.mul(fold).mul(width);
-
-  // Broad gusts travel through the field together. A smaller, phase-shifted motion
-  // adds blade-level shimmer, while both effects vanish at the root.
   const gust = sin(root.x.mul(0.095).add(root.z.mul(0.073)).sub(time.mul(0.72)).add(phase));
   const roll = sin(root.x.mul(0.24).sub(root.z.mul(0.16)).sub(time.mul(1.13)).add(phase.mul(0.37)));
   const shimmer = cos(time.mul(1.7).add(phase.mul(1.9))).mul(0.16);
-  const windAmount = gust.mul(0.64).add(roll.mul(0.25)).add(shimmer).mul(wind);
+  const windAmount = gust.mul(0.64).add(roll.mul(0.25)).add(shimmer).mul(attribute('wind', 'float'));
   const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.16);
   const localX = root.x
     .add(sideX.mul(across).mul(width))
@@ -155,7 +148,6 @@ function range(rng, min, max) {
 }
 
 function distanceToPath(x, z) {
-  // The garden path curves around the pond. Sample a short polyline for a stable distance.
   let nearest = Infinity;
   let lastX = -28;
   let lastZ = 7.4 + Math.sin(lastX * 0.19) * 0.9;
@@ -182,8 +174,6 @@ function chooseBreed(x, z, pondDistance) {
 }
 
 function densityFor(breed, radius) {
-  // Three distance tiers retain the field's cover while avoiding full close-up geometry
-  // across every square metre of the world. The innermost meadow follows the source density.
   const tier = radius < 17 ? 0 : radius < 30 ? 1 : 2;
   const densities = {
     meadow: [46, 18, 6],
@@ -191,6 +181,16 @@ function densityFor(breed, radius) {
     rough: [20, 10, 5],
   };
   return densities[breed][tier];
+}
+
+function makeCellRng(seed) {
+  let value = seed >>> 0;
+  return () => {
+    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
+    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
+    value ^= value >>> 16;
+    return (value >>> 0) / 4294967296;
+  };
 }
 
 function growTuft(writer, rng, breedName, x, z, groundY) {
@@ -232,14 +232,15 @@ function growUndergrowth(writer, rng, breedName, x, z, groundY) {
     const color = palette[rng() < 0.68 ? 0 : 1];
     const height = breedName === 'lawn' ? range(rng, 0.025, 0.055)
       : breedName === 'rough' ? range(rng, 0.10, 0.30)
-        : range(rng, 0.05, 0.18);
+      : range(rng, 0.05, 0.18);
     writer.add(rootX, groundY, rootZ,
       range(rng, 0.003, 0.006), height, range(rng, 0.08, 0.5), angle,
       angle + range(rng, -0.9, 0.9), rng() * PI2, 0.12, color);
   }
 }
 
-export function createGrass(scene, { rng, wind, terrainY, pondDistance }) {
+function createGrass(scene, options) {
+  const { rng, wind, terrainY, pondDistance } = options;
   const writers = {
     lawn: new BladeRecords(),
     meadow: new BladeRecords(),
@@ -257,8 +258,6 @@ export function createGrass(scene, { rng, wind, terrainY, pondDistance }) {
       if (shore < 0.38) continue;
       const breedName = chooseBreed(px, pz, pondDistance);
       const targetDensity = densityFor(breedName, radius);
-      // Jittered-grid thinning gives stable deterministic placement and the requested
-      // approximate tufts/m² at every detail tier without a million full-rate tests.
       const cellArea = step * step;
       const probability = Math.min(1, targetDensity * cellArea);
       const localRng = makeCellRng((cellIndex++ * 747796405 + 2891336453) >>> 0);
@@ -266,22 +265,21 @@ export function createGrass(scene, { rng, wind, terrainY, pondDistance }) {
       const groundY = terrainY(px, pz);
       const writer = writers[breedName];
       growTuft(writer, rng, breedName, px, pz, groundY);
-      // The reference uses a high count of tiny shoots between tufts. Thin them by LOD;
-      // all close meadow cells retain the original 420/m² undergrowth rate in expectation.
       const fillRate = radius < 17 ? 1 : radius < 30 ? 0.36 : 0.12;
       if (rng() < fillRate) growUndergrowth(writer, rng, breedName, px, pz, groundY);
     }
   }
 
   const bladeGeometry = makeBladeGeometry();
-  const material = makeMaterial(wind);
+  const material = makeMaterial();
+  material.userData = { wind };
   for (const [breed, writer] of Object.entries(writers)) {
     if (!writer.count) continue;
     const geometry = bladeGeometry.clone();
     writer.attach(geometry);
+    geometry.setAttribute('wind', new THREE.Float32BufferAttribute(new Float32Array(writer.count).fill(wind.value), 1));
     const grass = new THREE.Mesh(geometry, material);
     grass.name = `${breed}-grass-${writer.count}-blades`;
-    grass.frustumCulled = false;
     grass.castShadow = true;
     grass.receiveShadow = true;
     scene.add(grass);
@@ -289,12 +287,6 @@ export function createGrass(scene, { rng, wind, terrainY, pondDistance }) {
   }
 }
 
-function makeCellRng(seed) {
-  let value = seed >>> 0;
-  return () => {
-    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-    value ^= value >>> 16;
-    return (value >>> 0) / 4294967296;
-  };
-}
+export { createGrass };
+
+export default {};
