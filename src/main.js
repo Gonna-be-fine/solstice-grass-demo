@@ -23,13 +23,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 
 const controls = new OrbitControls(camera, canvas);
-controls.target.set(0, 0.75, -1.8);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.minDistance = 8;
-controls.maxDistance = 38;
-controls.maxPolarAngle = Math.PI * 0.48;
-controls.minPolarAngle = 0.22;
+// controls.target.set(0, 0.75, -1.8);
+// controls.enableDamping = true;
+// controls.dampingFactor = 0.06;
+// controls.minDistance = 8;
+// controls.maxDistance = 38;
+// controls.maxPolarAngle = Math.PI * 0.48;
+// controls.minPolarAngle = 0.22;
 
 scene.add(new THREE.HemisphereLight('#dfe9e1', '#263529', 1.55));
 const sun = new THREE.DirectionalLight('#f7dfaf', 2.9);
