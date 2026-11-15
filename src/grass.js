@@ -39,7 +39,29 @@ class BladeRecords {
     this.count++;
   }
 
+  shuffle() {
+    // Spread the draw prefix over the whole meadow so lowering density doesn't
+    // remove one contiguous region of grass.
+    let state = 0x6d2b79f5;
+    const random = () => {
+      state = Math.imul(state ^ (state >>> 15), state | 1);
+      state ^= state + Math.imul(state ^ (state >>> 7), state | 61);
+      return ((state ^ (state >>> 14)) >>> 0) / 4294967296;
+    };
+    const temp = new Float32Array(INSTANCE_STRIDE);
+    for (let i = this.count - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      if (i === j) continue;
+      const a = i * INSTANCE_STRIDE;
+      const b = j * INSTANCE_STRIDE;
+      temp.set(this.data.subarray(a, a + INSTANCE_STRIDE));
+      this.data.copyWithin(a, b, b + INSTANCE_STRIDE);
+      this.data.set(temp, b);
+    }
+  }
+
   attach(geometry) {
+    this.shuffle();
     const data = this.data.subarray(0, this.count * INSTANCE_STRIDE);
     const buffer = new THREE.InstancedInterleavedBuffer(data, INSTANCE_STRIDE, 1);
     const attributes = [
