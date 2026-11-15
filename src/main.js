@@ -31,6 +31,13 @@ controls.maxDistance = 38;
 controls.maxPolarAngle = Math.PI * 0.48;
 controls.minPolarAngle = 0.22;
 
+function resizeRenderer() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+resizeRenderer();
+
 scene.add(new THREE.HemisphereLight('#dfe9e1', '#263529', 1.55));
 const sun = new THREE.DirectionalLight('#f7dfaf', 2.9);
 sun.position.set(-18, 24, 10);
@@ -156,7 +163,9 @@ function createTrees() {
     const radius = 20 + rng() * 8; const x = Math.cos(angle) * radius; const z = Math.sin(angle) * radius - 1;
     if (pondDistance(x, z) < 2) continue;
     const scale = 0.75 + rng();
-    dummy.position.set(x, terrainY(x, z) + 1.95 * scale, z); dummy.scale.set(scale, scale * (1.3 + rng() * 0.42), scale); dummy.rotation.y = rng() * Math.PI * 2; dummy.updateMatrix(); trunk.setMatrixAt(n, dummy.matrix);
+    const trunkHeightScale = 1.3 + rng() * 0.42;
+    const trunkGroundOffset = terrainY(x, z) + (4.2 * 0.5 * scale * trunkHeightScale);
+    dummy.position.set(x, trunkGroundOffset, z); dummy.scale.set(scale, scale * trunkHeightScale, scale); dummy.rotation.y = rng() * Math.PI * 2; dummy.updateMatrix(); trunk.setMatrixAt(n, dummy.matrix);
     dummy.position.y += 2.7 * scale; dummy.scale.multiplyScalar(2.1); dummy.updateMatrix(); canopy.setMatrixAt(n, dummy.matrix);
     canopy.setColorAt(n, new THREE.Color().setHSL(0.28 + rng() * 0.04, 0.22 + rng() * 0.12, 0.22 + rng() * 0.1)); n++;
   }
@@ -203,5 +212,5 @@ windInput.addEventListener('input', () => {
   const amount = Number(windInput.value); wind.value = amount;
   windValue.textContent = amount < 0.2 ? 'Still' : amount < 0.7 ? 'Gentle' : amount < 1.15 ? 'Breezy' : 'Strong';
 });
-window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+window.addEventListener('resize', resizeRenderer);
 main();
