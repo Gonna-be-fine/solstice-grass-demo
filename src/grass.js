@@ -3,7 +3,7 @@ import { attribute, cos, positionLocal, sin, time, vec3 } from 'three/tsl';
 
 const PI2 = Math.PI * 2;
 const ROWS = [0, 0.4, 0.75];
-const INDICES_PER_BLADE = 30;
+const INSTANCE_STRIDE = 14;
 
 const PALETTES = {
   lawn: [new THREE.Color('#35552e'), new THREE.Color('#496c37'), new THREE.Color('#5b783d'), new THREE.Color('#8a8750')],
@@ -17,58 +17,41 @@ const BREEDS = {
   rough: { tufts: [12, 26], height: [0.55, 1.05], width: [0.008, 0.014], lean: [0.20, 0.85], fill: 240 },
 };
 
+// All per-blade data shares one interleaved instance buffer. Separate attributes
+// would create more vertex buffers than WebGPU's portable limit allows.
 class BladeRecords {
   constructor() {
     this.capacity = 16384;
     this.count = 0;
-    this.fields = Object.fromEntries(
-      Object.entries({
-        iRoot: 3,
-        iWidth: 1,
-        iHeight: 1,
-        iLean: 1,
-        iAngle: 1,
-        iBendAngle: 1,
-        iPhase: 1,
-        iFold: 1,
-        iColor: 3,
-      }).map(([name, size]) => [name, { size, data: new Float32Array(this.capacity * size) }]),
-    );
+    this.data = new Float32Array(this.capacity * INSTANCE_STRIDE);
   }
 
   grow() {
     this.capacity *= 2;
-    for (const field of Object.values(this.fields)) {
-      const larger = new Float32Array(this.capacity * field.size);
-      larger.set(field.data);
-      field.data = larger;
-    }
+    const larger = new Float32Array(this.capacity * INSTANCE_STRIDE);
+    larger.set(this.data);
+    this.data = larger;
   }
 
   add(rootX, rootY, rootZ, width, height, lean, angle, bendAngle, phase, fold, color) {
     if (this.count === this.capacity) this.grow();
-    const values = {
-      iRoot: [rootX, rootY, rootZ],
-      iWidth: [width],
-      iHeight: [height],
-      iLean: [lean],
-      iAngle: [angle],
-      iBendAngle: [bendAngle],
-      iPhase: [phase],
-      iFold: [fold],
-      iColor: color.toArray(),
-    };
-    for (const [name, value] of Object.entries(values)) {
-      const field = this.fields[name];
-      field.data.set(value, this.count * field.size);
-    }
+    const offset = this.count * INSTANCE_STRIDE;
+    this.data.set([
+      rootX, rootY, rootZ, width, height, lean, angle,
+      bendAngle, phase, fold, ...color.toArray(),
+    ], offset);
     this.count++;
   }
 
   attach(geometry) {
-    for (const [name, field] of Object.entries(this.fields)) {
-      const data = field.data.subarray(0, this.count * field.size);
-      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(data, field.size, false));
+    const data = this.data.subarray(0, this.count * INSTANCE_STRIDE);
+    const buffer = new THREE.InstancedInterleavedBuffer(data, INSTANCE_STRIDE, 1);
+    const attributes = [
+      ['iRoot', 3, 0], ['iWidth', 1, 3], ['iHeight', 1, 4], ['iLean', 1, 5],
+      ['iAngle', 1, 6], ['iBendAngle', 1, 7], ['iPhase', 1, 8], ['iFold', 1, 9], ['iColor', 3, 10],
+    ];
+    for (const [name, size, offset] of attributes) {
+      geometry.setAttribute(name, new THREE.InterleavedBufferAttribute(buffer, size, offset, false));
     }
     geometry.instanceCount = this.count;
   }
@@ -78,10 +61,7 @@ function makeBladeGeometry() {
   const geometry = new THREE.InstancedBufferGeometry();
   const positions = [];
   const indices = [];
-  for (let row = 0; row < ROWS.length; row++) {
-    const t = ROWS[row];
-    positions.push(-0.5, t, 0, 0, t, -0.18, 0.5, t, 0);
-  }
+  for (const t of ROWS) positions.push(-0.5, t, 0, 0, t, -0.18, 0.5, t, 0);
   positions.push(0, 1, 0);
   for (let row = 0; row < ROWS.length - 1; row++) {
     const a = row * 3;
@@ -98,12 +78,8 @@ function makeBladeGeometry() {
   return geometry;
 }
 
-function makeMaterial() {
-  const material = new THREE.MeshStandardNodeMaterial({
-    color: '#ffffff',
-    roughness: 0.88,
-    side: THREE.DoubleSide,
-  });
+function makeMaterial(wind) {
+  const material = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', roughness: 0.88, side: THREE.DoubleSide });
   const root = attribute('iRoot', 'vec3');
   const width = attribute('iWidth', 'float');
   const height = attribute('iHeight', 'float');
@@ -126,18 +102,10 @@ function makeMaterial() {
   const gust = sin(root.x.mul(0.095).add(root.z.mul(0.073)).sub(time.mul(0.72)).add(phase));
   const roll = sin(root.x.mul(0.24).sub(root.z.mul(0.16)).sub(time.mul(1.13)).add(phase.mul(0.37)));
   const shimmer = cos(time.mul(1.7).add(phase.mul(1.9))).mul(0.16);
-  const windAmount = gust.mul(0.64).add(roll.mul(0.25)).add(shimmer).mul(attribute('wind', 'float'));
+  const windAmount = gust.mul(0.64).add(roll.mul(0.25)).add(shimmer).mul(wind);
   const windReach = windAmount.mul(t.mul(t)).mul(height).mul(0.16);
-  const localX = root.x
-    .add(sideX.mul(across).mul(width))
-    .add(bendX.mul(foldDistance))
-    .add(bendX.mul(curve))
-    .add(windReach.mul(0.94));
-  const localZ = root.z
-    .add(sideZ.mul(across).mul(width))
-    .add(bendZ.mul(foldDistance))
-    .add(bendZ.mul(curve))
-    .add(windReach.mul(0.34));
+  const localX = root.x.add(sideX.mul(across).mul(width)).add(bendX.mul(foldDistance)).add(bendX.mul(curve)).add(windReach.mul(0.94));
+  const localZ = root.z.add(sideZ.mul(across).mul(width)).add(bendZ.mul(foldDistance)).add(bendZ.mul(curve)).add(windReach.mul(0.34));
   const localY = root.y.add(t.mul(height)).sub(windReach.mul(0.035));
   material.positionNode = vec3(localX, localY, localZ);
   return material;
@@ -167,20 +135,14 @@ function distanceToPath(x, z) {
 function chooseBreed(x, z, pondDistance) {
   const shore = pondDistance(x, z);
   const path = distanceToPath(x, z);
-  const woodEdge = Math.hypot(x, z);
   if (shore > 0 && shore < 2.8 && Math.sin(x * 0.13 + z * 0.08) > -0.15) return 'rough';
-  if (woodEdge > 30 || path < 2.7) return 'lawn';
+  if (Math.hypot(x, z) > 30 || path < 2.7) return 'lawn';
   return 'meadow';
 }
 
 function densityFor(breed, radius) {
   const tier = radius < 17 ? 0 : radius < 30 ? 1 : 2;
-  const densities = {
-    meadow: [46, 18, 6],
-    lawn: [112, 42, 12],
-    rough: [20, 10, 5],
-  };
-  return densities[breed][tier];
+  return { meadow: [46, 18, 6], lawn: [112, 42, 12], rough: [20, 10, 5] }[breed][tier];
 }
 
 function makeCellRng(seed) {
@@ -233,19 +195,14 @@ function growUndergrowth(writer, rng, breedName, x, z, groundY) {
     const height = breedName === 'lawn' ? range(rng, 0.025, 0.055)
       : breedName === 'rough' ? range(rng, 0.10, 0.30)
       : range(rng, 0.05, 0.18);
-    writer.add(rootX, groundY, rootZ,
-      range(rng, 0.003, 0.006), height, range(rng, 0.08, 0.5), angle,
+    writer.add(rootX, groundY, rootZ, range(rng, 0.003, 0.006), height, range(rng, 0.08, 0.5), angle,
       angle + range(rng, -0.9, 0.9), rng() * PI2, 0.12, color);
   }
 }
 
 function createGrass(scene, options) {
   const { rng, wind, terrainY, pondDistance } = options;
-  const writers = {
-    lawn: new BladeRecords(),
-    meadow: new BladeRecords(),
-    rough: new BladeRecords(),
-  };
+  const writers = { lawn: new BladeRecords(), meadow: new BladeRecords(), rough: new BladeRecords() };
   const step = 0.14;
   let cellIndex = 0;
   for (let z = -23; z < 22; z += step) {
@@ -254,12 +211,9 @@ function createGrass(scene, options) {
       const pz = z + (rng() - 0.5) * step * 0.92;
       const radius = Math.hypot(px, pz);
       if ((px / 26) ** 2 + (pz / 23) ** 2 > 0.94) continue;
-      const shore = pondDistance(px, pz);
-      if (shore < 0.38) continue;
+      if (pondDistance(px, pz) < 0.38) continue;
       const breedName = chooseBreed(px, pz, pondDistance);
-      const targetDensity = densityFor(breedName, radius);
-      const cellArea = step * step;
-      const probability = Math.min(1, targetDensity * cellArea);
+      const probability = Math.min(1, densityFor(breedName, radius) * step * step);
       const localRng = makeCellRng((cellIndex++ * 747796405 + 2891336453) >>> 0);
       if (localRng() > probability) continue;
       const groundY = terrainY(px, pz);
@@ -271,13 +225,11 @@ function createGrass(scene, options) {
   }
 
   const bladeGeometry = makeBladeGeometry();
-  const material = makeMaterial();
-  material.userData = { wind };
+  const material = makeMaterial(wind);
   for (const [breed, writer] of Object.entries(writers)) {
     if (!writer.count) continue;
     const geometry = bladeGeometry.clone();
     writer.attach(geometry);
-    geometry.setAttribute('wind', new THREE.Float32BufferAttribute(new Float32Array(writer.count).fill(wind.value), 1));
     const grass = new THREE.Mesh(geometry, material);
     grass.name = `${breed}-grass-${writer.count}-blades`;
     grass.castShadow = true;
@@ -288,5 +240,3 @@ function createGrass(scene, options) {
 }
 
 export { createGrass };
-
-export default {};
