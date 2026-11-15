@@ -141,11 +141,7 @@ function chooseBreed(x, z, pondDistance) {
 
 function densityFor(breed, radius) {
   const tier = radius < 17 ? 0 : radius < 30 ? 1 : 2;
-  const densities = {
-    meadow: [62, 30, 10],
-    lawn: [86, 38, 14],
-    rough: [26, 12, 6],
-  };
+  const densities = { meadow: [62, 30, 10], lawn: [86, 38, 14], rough: [26, 12, 6] };
   return densities[breed][tier];
 }
 
@@ -187,12 +183,16 @@ function growTuft(writer, rng, breedName, x, z, groundY) {
   }
 }
 
-function growUndergrowth(writer, rng, breedName, x, z, groundY) {
-  const count = BREEDS[breedName].fill;
+function growUndergrowth(writer, rng, breedName, x, z, groundY, densityScale) {
+  // `fill` is blades per square metre in the source breed descriptions, not
+  // hundreds of filler blades per tuft. Divide by the local tuft density to get
+  // a sane count for this tuft and scale it down with distance LOD.
+  const tuftDensity = densityFor(breedName, Math.hypot(x, z));
+  const count = Math.max(0, Math.round((BREEDS[breedName].fill / tuftDensity) * densityScale));
   const palette = PALETTES[breedName];
   for (let i = 0; i < count; i++) {
     const angle = rng() * PI2;
-    const radius = Math.sqrt(rng()) * 0.48;
+    const radius = Math.sqrt(rng()) * 0.16;
     const rootX = x + Math.cos(angle) * radius;
     const rootZ = z + Math.sin(angle) * radius;
     const color = palette[rng() < 0.68 ? 0 : 1];
@@ -226,8 +226,10 @@ function createGrass(scene, options) {
       const groundY = terrainY(px, pz);
       const writer = writers[breedName];
       growTuft(writer, rng, breedName, px, pz, groundY);
-      const fillRate = radius < 17 ? 1 : radius < 30 ? 0.42 : 0.16;
-      if (rng() < fillRate) growUndergrowth(writer, rng, breedName, px, pz, groundY);
+      const densityScale = radius < 17 ? 1 : radius < 30 ? 0.45 : 0.18;
+      if (rng() < (radius < 17 ? 1 : radius < 30 ? 0.42 : 0.16)) {
+        growUndergrowth(writer, rng, breedName, px, pz, groundY, densityScale);
+      }
     }
   }
 
@@ -247,7 +249,3 @@ function createGrass(scene, options) {
 }
 
 export { createGrass };
-
-export default {};
-
-
