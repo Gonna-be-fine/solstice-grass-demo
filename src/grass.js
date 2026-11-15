@@ -241,6 +241,7 @@ function createGrass(scene, options) {
     writer.attach(geometry);
     const grass = new THREE.Mesh(geometry, material);
     grass.name = `${breed}-grass-${writer.count}-blades`;
+    grass.frustumCulled = false
     grass.castShadow = true;
     grass.receiveShadow = true;
     scene.add(grass);
