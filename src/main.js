@@ -3,6 +3,7 @@ import { uniform } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import './style.css';
 import { createGrass } from './grass.js';
+import { createTurfTexture } from './ground-texture.js';
 
 const canvas = document.querySelector('#scene');
 const loading = document.querySelector('#loading');
@@ -89,7 +90,10 @@ function createGround() {
   const positions = geometry.attributes.position;
   for (let i = 0; i < positions.count; i++) positions.setY(i, terrainY(positions.getX(i), positions.getZ(i)));
   geometry.computeVertexNormals();
-  const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#687f5d', roughness: 0.98 }));
+  const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    map: createTurfTexture(), color: '#ffffff', roughness: 0.98,
+  }));
+  ground.name = 'terrain-ground';
   ground.receiveShadow = true;
   scene.add(ground);
 }
