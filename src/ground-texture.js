@@ -16,8 +16,7 @@ function createTurfTexture() {
     return ((value ^ (value >>> 16)) >>> 0) / 4294967295;
   }
 
-  // Periodic value noise so the texture has no visible edge if UV wrapping is
-  // ever enabled. `cells` determines the scale of the mottling.
+  // Periodic value noise so the texture tiles without visible seams.
   function noise(x, y, cells, seed) {
     const px = x * cells;
     const py = y * cells;
@@ -44,11 +43,11 @@ function createTurfTexture() {
       const value = broad + mottling + fine + grain;
       const i = (y * size + x) * 4;
 
-      // Dark olive soil between blades through fresh meadow green, kept subtle
-      // so it reads as continuous turf rather than a noisy repeating pattern.
-      pixels[i] = Math.round(54 + value * 24);
-      pixels[i + 1] = Math.round(79 + value * 29);
-      pixels[i + 2] = Math.round(37 + value * 16);
+      // Lift the green channel and keep the soil shadow subtle so the ground
+      // reads as healthy turf instead of a dark olive sheet.
+      pixels[i] = Math.round(61 + value * 24);
+      pixels[i + 1] = Math.round(94 + value * 34);
+      pixels[i + 2] = Math.round(40 + value * 16);
       pixels[i + 3] = 255;
     }
   }
@@ -56,6 +55,9 @@ function createTurfTexture() {
   context.putImageData(image, 0, 0);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(6, 6);
   texture.anisotropy = 4;
   texture.needsUpdate = true;
   return texture;
